@@ -12,39 +12,34 @@
 #include "wco_routine.h"
 #include "wco_assert.h"
 
-/*
- * swap 函数要实现的是：
- * 1. 保存from_co的8个callee负责的寄存器。此时rsp应指向retaddr
- * 2. 把to_co的8+2个寄存器值加载进来。之所以加两个，是为了在最初的时候，让封装的协程函数成功运行。
- * 3. ret
- * */
+#define RSP 0
+#define FPU 7
+#define RDI 8
+#define RSI 9
 
 
-enum RegisterIdx{
-    RSP = 0,
-    RBP,
-    RBX,
-    R12,
-    R13,
-    R14,
-    R15,
-    FPU, // 前面是callee要保存的寄存器
-    RDI,
-    RSI, // 这两个传参用的寄存器，为了
-//    RETADDR, // 除了要保存寄存器外，还要保存返回地址。
-};
+static __thread WcoEnv *wcoEnv;
 
-static __thread WcoEnv wcoEnv;
-
-extern void* WcoSwapContext(WcoRoutine* from_co, WcoRoutine* to_co) __asm__("WcoSwapContext"); // asm
+extern void WcoSwapContext(WcoRoutine* from_co, WcoRoutine* to_co) __asm__("WcoSwapContext"); // asm
 extern void WcoSaveFpucwMxcsr(void* p) __asm__("WcoSaveFpucwMxcsr");  // asm
 
+void PrepareSharedStack(WcoRoutine* co);
+
+void WcoInitRoutineEnv(){
+    wcoEnv = (WcoEnv*)calloc(sizeof(WcoEnv), 1);
+    WcoSaveFpucwMxcsr(&(wcoEnv->fpucwMxcsr));
+
+    WcoRoutine *mainCo = (WcoRoutine*)calloc(sizeof(WcoRoutine), 1);
+    wcoEnv->curCo = mainCo;
+    wcoEnv->mainCo = mainCo;
+}
 
 
-void realWcoRoutineFn(WcoRoutine *wco, void *arg){
-    wco_assertptr(wco);
-    wco_assertptr(wco->fn);
-    wco->fn(arg);
+void realWcoRoutineFn(WcoRoutine *co, void *arg){
+    wco_assertptr(co);
+    wco_assertptr(co->fn);
+    co->fn(arg);
+    co->isEnd = true;
     WcoYield();
 }
 
@@ -57,29 +52,37 @@ void realWcoRoutineFn(WcoRoutine *wco, void *arg){
 // sharedStack表示共享栈，其为null表示不使用共享栈，自己新建一个栈，栈大小为stackSize
 // 不为null，则表示使用指定的共享栈，
 WcoRoutine* WcoCreate(WcoStack *sharedStack, WcoFn fn, void *arg){
-    // 保存控制字
-    if(!wcoFpucwMxcsr){
-        WcoSaveFpucwMxcsr(&wcoFpucwMxcsr);
+    wco_assertptr(fn);
+
+    if(!wcoEnv){
+        WcoInitRoutineEnv();
     }
 
-    wco_assertptr(fn);
+    WcoRoutine *wco = (WcoRoutine*)calloc(sizeof(WcoRoutine), 1);
     WcoStack *stack;
 
     if(!sharedStack){ // 如果不指定栈，就默认
-        size_t sz = 1024 * 1024 * 2; // 2M
-        stack = WcoCreateStack(sz, false);
+        stack = WcoCreateStack(0, false);
+        stack->isShared = false;
+        stack->owner = wco;
     }else{
+        if(sharedStack->owner){
+            PrepareSharedStack(sharedStack->owner);
+        }
+
         stack = sharedStack;
-        // TODO： 实现共享栈的细节
+        stack->isShared = true;
+        stack->owner = wco;
+        size_t sz = 64;
+        wco->saveBuffer = malloc(sz);
+        wco->saveBufferSize = sz;
     }
 
     *(void**)(stack->alignedHighPtr - sizeof(void*)) = (void*)realWcoRoutineFn;
-
-    WcoRoutine *wco = (WcoRoutine*)calloc(sizeof(WcoRoutine), 1);
     wco->stack = stack;
     wco->fn = fn;
     wco->reg[RSP] = (char*)stack->alignedHighPtr - sizeof(void*);
-    wco->reg[FPU] = wcoFpucwMxcsr;
+    wco->reg[FPU] = wcoEnv->fpucwMxcsr;
     wco->reg[RDI] = (void*)wco; // 第一参数
     wco->reg[RSI] = arg; // 第二参数
     return wco;
@@ -135,17 +138,83 @@ WcoStack *WcoCreateStack(size_t size, bool guardPageEnabled){
     u_int64_t highPtr = (u_int64_t)stack->buffer + stack->bufferSize;
     highPtr = (highPtr >> 4) << 4; // 按照16字节对齐
     stack->alignedHighPtr = (void*)highPtr;
-
+    stack->stackSize = stack->alignedHighPtr-stack->buffer;
 //    *(void**)(stack->alignedHighPtr - sizeof(void*)) = (void*)WcoProtector;
+    return stack;
 }
 
 
-void WcoResume(WcoRoutine* co){
+void WcoResume(WcoRoutine* to_co){
+    assert(to_co != wcoEnv->mainCo);
+    assert(wcoEnv->curCo == wcoEnv->mainCo);
 
+    if(to_co->isEnd){
+        return;
+    }
+
+    if(to_co->stack->owner != to_co){
+        PrepareSharedStack(to_co);
+    }
+
+    WcoRoutine* from_co = wcoEnv->curCo;
+    wcoEnv->curCo = to_co;
+    WcoSwapContext(from_co, to_co);
+    wcoEnv->curCo = from_co;
 }
 
 
 void WcoYield(){
-    wcoCallStack[];
-    WcoSwapContext();
+    assert(wcoEnv->curCo != wcoEnv->mainCo);
+    WcoSwapContext(wcoEnv->curCo, wcoEnv->mainCo);
+}
+
+
+/*
+ * 销毁协程。如果协程栈不是shared，一并销毁协程栈。
+ * */
+void WcoDestroy(WcoRoutine* co){
+    if(!co->stack->isShared){
+        WcoDestroyStack(co->stack);
+    }else if(co->stack->owner == co){
+        co->stack->owner = NULL;
+    }
+
+    free(co->saveBuffer);
+    free(co);
+}
+
+/*
+ * 销毁协程栈，无论是否仍有协程使用它。
+ * */
+void WcoDestroyStack(WcoStack* stack){
+    if(stack->guardPageEnabled){
+        assert(0 == munmap(stack->buffer, stack->bufferSize));
+    }else{
+        free(stack->buffer);
+    }
+    free(stack);
+}
+
+
+void PrepareSharedStack(WcoRoutine* co){
+    // 保存old owner的栈内容
+    WcoRoutine *oldOwner = co->stack->owner;
+    size_t sz = oldOwner->stack->alignedHighPtr - oldOwner->reg[RSP];
+    if(oldOwner->saveBufferSize < sz){
+        free(oldOwner->saveBuffer);
+        while(1){
+            oldOwner->saveBufferSize = oldOwner->saveBufferSize << 1;
+            if(oldOwner->saveBufferSize >= sz){
+                break;
+            }
+        }
+        oldOwner->saveBuffer = malloc(oldOwner->saveBufferSize);
+        assert(oldOwner->saveBuffer);
+    }
+    memcpy(oldOwner->saveBuffer, oldOwner->reg[RSP], sz);
+    // 加载new owner的栈内容
+    sz = co->stack->alignedHighPtr - co->reg[RSP];
+    memcpy(co->reg[RSP], co->saveBuffer, sz);
+
+    co->stack->owner = co;
 }

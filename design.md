@@ -24,7 +24,12 @@
 
 2. 协程库的API
 因此协程库需要实现的api有：
-creat()
+creat() // 如果创建协程的时候，stack为null，那么创建一个私有的stack，并且destroy协程的时候，会释放掉该stack。
+destroy()
+
+creatstack()
+destroystack()
+
 resume()
 yield()
 event_loop()
@@ -43,25 +48,9 @@ libco的resume，只能从主协程发起；yield退回主协程。
 
 3. 自己对libco的改进
 
-修复libco中的不遵循x86 Sys V ABI的bug，为协程栈添加保护区。改进hook系统调用。精简api。
-
-关键是子协程中，能否在有eventloop的情况下，新建并运行协程。
-答：可以，accept协程中，新建并运行worker协程a，worker协程a遇到hook的IO后，挂起；之后，回到accept协程执行；之后，worker协程a再次执行，都是从主协程切过去的。
-
-
-
-resume可以从任何协程发起，yield只能回到主协程，怎么样？不合理！
-
-
-libaco如果写server，就是accept协程里面，运行库。
-
-
-
-应该写pthread风格的协程库。
-关于栈共享的问题，实现共享栈。
-
-
-先实现非共享
+修复libco中的不遵循x86 Sys V ABI的bug
+为协程栈添加guard page
+改进hook系统调用
 
 
 
