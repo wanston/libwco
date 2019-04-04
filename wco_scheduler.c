@@ -9,6 +9,7 @@
 /*
  * TODO: 1. 优化WcoScheduler中，fd和协程的存储方式
  * TODO: 2. 允许两个协程同时对同一fd监听不同的事件
+ * TODO: 3. WcoAddCoToScheduler接口是否要添加timeout参数？ 最好是设计接口控制协程的fd的超时时间
  * */
 
 static __thread WcoScheduler *wcoScheduler;
@@ -22,9 +23,9 @@ WcoScheduler *WcoGetScheduler(){
         wcoScheduler = (WcoScheduler*)malloc(sizeof(WcoScheduler));
         memset(wcoScheduler, 0, sizeof(WcoScheduler));
         wcoScheduler->pendingCoQueue = WcoQueueCreate();
-        wcoScheduler->epollFd = epoll_create(0);
-        wcoScheduler->epollElemsSize = 0;
+        wcoScheduler->epollFd = epoll_create(1);
         assert(wcoScheduler->epollFd >= 0);
+        wcoScheduler->epollElemsSize = 0;
         wcoScheduler->heap = WcoHeapCreate();
     }
 

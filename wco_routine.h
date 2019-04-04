@@ -12,8 +12,6 @@
 #error "libwco only support __x86_64__ platform."
 #endif
 
-// TODO: 查看#error的信息
-
 struct WcoEnv_t;
 struct WcoStack_t;
 struct WcoRoutine_t;

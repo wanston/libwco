@@ -43,6 +43,9 @@ void* WcoQueuePop(WcoQueue *q){
     void* data = node->data;
     q->head->next = node->next;
     free(node);
+    if(node == q->tail){
+        q->tail = q->head;
+    }
     return data;
 }
 
@@ -87,12 +90,12 @@ void WcoHeapPush(WcoBigRootHeap* heap, WcoHeapNode node){
         heap->capacity = newCap;
     }
 
-    size_t hole = heap->size+1;
+    heap->size++;
+    size_t hole = heap->size;
     for(; hole > 1 && node.time > heap->content[hole/2].time; hole /= 2){
         heap->content[hole] = heap->content[hole/2];
     }
     heap->content[hole] = node;
-    heap->size++;
 }
 
 WcoHeapNode WcoHeapTop(WcoBigRootHeap* heap){
@@ -104,6 +107,7 @@ void WcoHeapPop(WcoBigRootHeap* heap){
     assert(!WcoHeapEmpty(heap));
     size_t hole = 1;
     WcoHeapNode node = heap->content[heap->size];
+    heap->size--;
     while(hole*2 <= heap->size){
         size_t max=hole*2;
         if(hole*2+1 <= heap->size && heap->content[hole*2+1].time > heap->content[hole*2].time){
@@ -116,7 +120,7 @@ void WcoHeapPop(WcoBigRootHeap* heap){
         }
         hole = max;
     }
-    heap->size--;
+    heap->content[hole] = node;
 }
 
 
