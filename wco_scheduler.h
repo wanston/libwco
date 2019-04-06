@@ -14,7 +14,7 @@ struct WcoEpollElem_t {
     int fd;
     WcoRoutine* co;
     int events;
-    int timeout;
+    long timeout;
 };
 
 typedef struct WcoEpollElem_t WcoEpollElem;

@@ -33,5 +33,4 @@ void WcoHeapDestroy(WcoBigRootHeap* heap);
 
 
 long WcoGetCurrentMsTime();
-
 #endif //PROJECT_WCO_TOOLS_H

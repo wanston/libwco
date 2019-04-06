@@ -60,4 +60,6 @@ void WcoDestroyStack(WcoStack* stack);
 
 void WcoResume(WcoRoutine* co);
 void WcoYield();
+
+WcoRoutine *WcoGetCurrentCo();
 #endif //LIBWCO_WCO_ROUTINE_H

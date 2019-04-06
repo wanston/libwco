@@ -14,7 +14,7 @@
 
 static __thread WcoScheduler *wcoScheduler;
 
-static int WcoAddEventToScheduler(WcoScheduler* , WcoRoutine*co, int fd, uint32_t events, int timeout);
+static int WcoAddEventToScheduler(WcoScheduler* , WcoRoutine*co, int fd, uint32_t events, struct timeval time_out);
 static void WcoRemoveEventFromScheduler(WcoScheduler* , WcoRoutine*co, int fd, uint32_t events);
 
 
@@ -98,7 +98,8 @@ void WcoRunScheduler(WcoScheduler *scheduler) {
  * read 系统调用中要：
  * epoll_add，把fd和WcoRoutine关联，存储起来。
  * */
-int WcoAddEventToScheduler(WcoScheduler* scheduler, WcoRoutine* co, int fd, uint32_t events, int timeout){
+int WcoAddEventToScheduler(WcoScheduler* scheduler, WcoRoutine* co, int fd, uint32_t events, struct timeval time_out){
+    long timeout = time_out.tv_sec*1000 + time_out.tv_usec/1000;
     assert(timeout >= 0);
 
     scheduler->epollElems[fd].events = events;
@@ -135,6 +136,7 @@ static void WcoRemoveEventFromScheduler(WcoScheduler* scheduler, WcoRoutine*co, 
 
 
 void WcoDestroyScheduler(WcoScheduler *scheduler){
+    assert(scheduler);
     WcoHeapDestroy(scheduler->heap);
     WcoQueueDestroy(scheduler->pendingCoQueue);
     free(scheduler);

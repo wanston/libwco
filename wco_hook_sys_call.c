@@ -12,7 +12,10 @@
 #include <stdlib.h>
 #include <stdarg.h>
 #include <assert.h>
+#include <sys/epoll.h>
+#include <errno.h>
 #include "wco_hook_sys_call.h"
+#include "wco_scheduler.h"
 
 /*
  * 设计思路：
@@ -43,8 +46,8 @@
 
 #define HOOK_SYS_FUNC(name) if( !g_sys_##name##_func ) { g_sys_##name##_func = (name##_pfn_t)dlsym(RTLD_NEXT,#name); }
 
-//#define USER_O_NONBLOCK 0
-//#define USER_O_BLOCK 1
+extern int WcoAddEventToScheduler(WcoScheduler* scheduler, WcoRoutine* co, int fd, uint32_t events, struct timeval time_out);
+extern void WcoRemoveEventFromScheduler(WcoScheduler* , WcoRoutine*co, int fd, uint32_t events);
 
 struct socket_attr_t{
     bool block;
@@ -62,29 +65,53 @@ typedef int (*close_pfn_t)(int fd);
 typedef ssize_t (*read_pfn_t)(int fildes, void *buf, size_t nbyte);
 typedef ssize_t (*write_pfn_t)(int fildes, const void *buf, size_t nbyte);
 
-typedef size_t (*send_pfn_t)(int socket, const void *buffer, size_t length, int flags);
 typedef ssize_t (*recv_pfn_t)(int socket, void *buffer, size_t length, int flags);
+typedef size_t (*send_pfn_t)(int socket, const void *buffer, size_t length, int flags);
 
-typedef ssize_t (*sendto_pfn_t)(int socket, const void *message, size_t length,
-                                int flags, const struct sockaddr *dest_addr,
-                                socklen_t dest_len);
 typedef ssize_t (*recvfrom_pfn_t)(int socket, void *buffer, size_t length,
                                   int flags, struct sockaddr *address,
                                   socklen_t *address_len);
-
-typedef ssize_t (*recvmsg_pfn_t)(int sockfd, struct msghdr *msg, int flags);
-typedef ssize_t (*sendmsg_pfn_t)(int socket, const struct msghdr *message, int flags);
+typedef ssize_t (*sendto_pfn_t)(int socket, const void *message, size_t length,
+                                int flags, const struct sockaddr *dest_addr,
+                                socklen_t dest_len);
 
 typedef int (*fcntl_pfn_t)(int fildes, int cmd, ...);
 
-typedef struct hostent* (*gethostbyname_pfn_t)(const char *name);
+typedef int (*getsockopt_pfn_t)(int sockfd, int level, int optname,
+                                void *optval, socklen_t *optlen);
+typedef int (*setsockopt_pfn_t)(int sockfd, int level, int optname,
+                                const void *optval, socklen_t optlen);
 
-typedef int (*setsockopt_pfn_t)(int socket, int level, int option_name,
-                                const void *option_value, socklen_t option_len);
+typedef struct hostent* (*gethostbyname_pfn_t)(const char *name);
 
 
 static socket_pfn_t g_sys_socket_func;
 static fcntl_pfn_t g_sys_fcntl_func;
+static connect_pfn_t g_sys_connect_func;
+static accept_pfn_t g_sys_accept_func;
+static close_pfn_t g_sys_close_func;
+static read_pfn_t g_sys_read_func;
+static write_pfn_t g_sys_write_func;
+static send_pfn_t g_sys_send_func;
+static recv_pfn_t g_sys_recv_func;
+static sendto_pfn_t g_sys_sendto_func;
+static recvfrom_pfn_t g_sys_recvfrom_func;
+
+
+static struct socket_attr_t* AllocSocketAttr(int fd){
+    struct socket_attr_t* fd_attr = calloc(1, sizeof(struct socket_attr_t));
+    assert(fd_attr);
+    fd_attr->block = true;
+    int flags = g_sys_fcntl_func(fd, F_GETFL) | O_NONBLOCK;
+    assert(g_sys_fcntl_func( fd, F_SETFL, flags) >= 0);
+    return fd_attr;
+}
+
+
+static void FreeSocketAttr(int fd){
+    free(socket_attr_array[fd]);
+    socket_attr_array[fd] = NULL;
+}
 
 
 int socket(int domain, int type, int protocol){
@@ -99,12 +126,72 @@ int socket(int domain, int type, int protocol){
         return fd;
     }
 
-    struct socket_attr_t* fd_attr = calloc(1, sizeof(struct socket_attr_t));
-    fd_attr->block = true;
-    int flags = g_sys_fcntl_func(fd, F_GETFL) | O_NONBLOCK;
-    assert(g_sys_fcntl_func( fd, F_SETFL, flags) >= 0);
-    socket_attr_array[fd] = fd_attr;
+    socket_attr_array[fd] = AllocSocketAttr(fd);
     return fd;
+}
+
+
+int connect(int fd, const struct sockaddr *address, socklen_t address_len){
+    HOOK_SYS_FUNC(connect);
+
+    if(WcoHookIsEnabled() && socket_attr_array[fd] && socket_attr_array[fd]->block){
+        int ret = g_sys_connect_func(fd, address, address_len);
+        if(ret < 0 &&  errno == EAGAIN){ // 存疑
+            struct timeval t = {0,0};
+            WcoAddEventToScheduler(WcoGetScheduler(), WcoGetCurrentCo(), fd, EPOLLOUT, t);
+            WcoYield();
+            WcoRemoveEventFromScheduler(WcoGetScheduler(), WcoGetCurrentCo(), fd, EPOLLOUT);
+            ret = g_sys_connect_func(fd, address, address_len);
+        }
+
+        if(ret < 0 && errno == EINPROGRESS){
+            struct timeval t = {0,0};
+            WcoAddEventToScheduler(WcoGetScheduler(), WcoGetCurrentCo(), fd, EPOLLOUT, t);
+            WcoYield();
+            WcoRemoveEventFromScheduler(WcoGetScheduler(), WcoGetCurrentCo(), fd, EPOLLOUT);
+            // TODO: 需要渠道得知 是超时，还是某个事件发生导致协程醒来
+            int err = 0;
+            socklen_t errlen = sizeof(err);
+            getsockopt(fd, SOL_SOCKET, SO_ERROR, &err, &errlen);
+            errno = err;
+            ret = err ? -1 : 0;
+        }
+        return ret;
+    }else{
+        return g_sys_connect_func(fd, address, address_len);
+    }
+}
+
+
+int accept(int fd, struct sockaddr * addr, socklen_t * addr_len){
+    HOOK_SYS_FUNC(accept);
+
+    if(WcoHookIsEnabled() && socket_attr_array[fd] && socket_attr_array[fd]->block){
+        int ret = g_sys_accept_func(fd, addr, addr_len);
+        if(ret < 0 && errno == EAGAIN){
+            struct timeval t = {0,0};
+            WcoAddEventToScheduler(WcoGetScheduler(), WcoGetCurrentCo(), fd, EPOLLIN, t);
+            WcoYield();
+            WcoRemoveEventFromScheduler(WcoGetScheduler(), WcoGetCurrentCo(), fd, EPOLLIN);
+            ret = g_sys_accept_func(fd, addr, addr_len);
+            if(ret >= 0){
+                socket_attr_array[fd] = AllocSocketAttr(fd); // Linux下，accept不会继承listen_fd的flags。
+            }
+        }
+        return ret;
+    }
+    return g_sys_accept_func(fd, addr, addr_len);
+}
+
+
+int close(int fd)
+{
+    HOOK_SYS_FUNC(close);
+
+    if(socket_attr_array[fd]){ // 扩大判断范围
+        FreeSocketAttr(fd);
+    }
+    return g_sys_close_func(fd);
 }
 
 
@@ -170,66 +257,123 @@ int fcntl(int fd, int cmd, ...){
 }
 
 
+ssize_t read(int fd, void *buf, size_t nbyte ){
+    HOOK_SYS_FUNC(read);
 
-
-int connect(int fd, const struct sockaddr *address, socklen_t address_len)
-{
-    HOOK_SYS_FUNC( connect );
-
-    if( !co_is_enable_sys_hook() )
-    {
-        return g_sys_connect_func(fd,address,address_len);
-    }
-
-    //1.sys call
-    int ret = g_sys_connect_func( fd,address,address_len );
-
-
-    if( O_NONBLOCK & lp->user_flag )
-    {
-        return ret;
-    }
-
-    if (!(ret < 0 && errno == EINPROGRESS))
-    {
-        return ret;
-    }
-
-    //2.wait
-    int pollret = 0;
-    struct pollfd pf = { 0 };
-
-    for(int i=0;i<3;i++) //25s * 3 = 75s
-    {
-        memset( &pf,0,sizeof(pf) );
-        pf.fd = fd;
-        pf.events = ( POLLOUT | POLLERR | POLLHUP );
-
-        pollret = poll( &pf,1,25000 );
-
-        if( 1 == pollret  )
-        {
-            break;
+    if(WcoHookIsEnabled() && socket_attr_array[fd] && socket_attr_array[fd]->block){
+        ssize_t ret = g_sys_read_func(fd, buf, nbyte);
+        if(ret < 0 && errno == EAGAIN){
+            WcoAddEventToScheduler(WcoGetScheduler(), WcoGetCurrentCo(), fd, EPOLLIN, socket_attr_array[fd]->read_timeout);
+            WcoYield();
+            WcoRemoveEventFromScheduler(WcoGetScheduler(), WcoGetCurrentCo(), fd, EPOLLIN);
+            // 要么因为可读而返回；要么不可读，因为超时而返回。
+            ret = g_sys_read_func(fd, buf, nbyte);
         }
-    }
-    if( pf.revents & POLLOUT ) //connect succ
-    {
-        errno = 0;
-        return 0;
+        return ret;
     }
 
-    //3.set errno
-    int err = 0;
-    socklen_t errlen = sizeof(err);
-    getsockopt( fd,SOL_SOCKET,SO_ERROR,&err,&errlen);
-    if( err )
-    {
-        errno = err;
-    }
-    else
-    {
-        errno = ETIMEDOUT;
-    }
-    return ret;
+    return g_sys_read_func(fd, buf, nbyte);
 }
+
+
+ssize_t write(int fd, const void *buf, size_t nbyte ){
+    HOOK_SYS_FUNC(write);
+
+    if(WcoHookIsEnabled() && socket_attr_array[fd] && socket_attr_array[fd]->block){
+        ssize_t ret = g_sys_write_func(fd, buf, nbyte);
+        if(ret < 0 && errno == EAGAIN){
+            WcoAddEventToScheduler(WcoGetScheduler(), WcoGetCurrentCo(), fd, EPOLLOUT, socket_attr_array[fd]->write_timeout);
+            WcoYield();
+            WcoRemoveEventFromScheduler(WcoGetScheduler(), WcoGetCurrentCo(), fd, EPOLLOUT);
+            // 要么因为可写而返回；要么不可写，因为超时而返回。
+            ret = g_sys_write_func(fd, buf, nbyte);
+        }
+        return ret;
+    }
+
+    return g_sys_write_func(fd, buf, nbyte);
+}
+
+
+ssize_t recv( int fd, void *buf, size_t n, int flags ){
+    HOOK_SYS_FUNC(recv);
+
+    if(WcoHookIsEnabled() && socket_attr_array[fd] && socket_attr_array[fd]->block){
+        ssize_t ret = g_sys_recv_func(fd, buf, n, flags);
+        if(ret < 0 && errno == EAGAIN){
+            WcoAddEventToScheduler(WcoGetScheduler(), WcoGetCurrentCo(), fd, EPOLLIN, socket_attr_array[fd]->read_timeout);
+            WcoYield();
+            WcoRemoveEventFromScheduler(WcoGetScheduler(), WcoGetCurrentCo(), fd, EPOLLIN);
+            // 要么因为可读而返回；要么不可读，因为超时而返回。
+            ret = g_sys_recv_func(fd, buf, n, flags);
+        }
+        return ret;
+    }
+
+    return g_sys_recv_func(fd, buf, n, flags);
+}
+
+
+ssize_t send(int fd, const void *buf, size_t n, int flags){
+    HOOK_SYS_FUNC(send);
+
+    if(WcoHookIsEnabled() && socket_attr_array[fd] && socket_attr_array[fd]->block){
+        ssize_t ret = g_sys_send_func(fd, buf, n, flags);
+        if(ret < 0 && errno == EAGAIN){
+            WcoAddEventToScheduler(WcoGetScheduler(), WcoGetCurrentCo(), fd, EPOLLOUT, socket_attr_array[fd]->write_timeout);
+            WcoYield();
+            WcoRemoveEventFromScheduler(WcoGetScheduler(), WcoGetCurrentCo(), fd, EPOLLOUT);
+            // 要么因为可写而返回；要么不可写，因为超时而返回。
+            ret = g_sys_send_func(fd, buf, n, flags);
+        }
+        return ret;
+    }
+
+    return g_sys_send_func(fd, buf, n, flags);
+}
+
+
+ssize_t recvfrom(int fd, void *buf, size_t n,
+                 int flags, struct sockaddr *addr,
+                 socklen_t *addr_len)
+{
+    HOOK_SYS_FUNC(recvfrom);
+
+    if(WcoHookIsEnabled() && socket_attr_array[fd] && socket_attr_array[fd]->block){
+        ssize_t ret = g_sys_recvfrom_func(fd, buf, n, flags, addr, addr_len);
+        if(ret < 0 && errno == EAGAIN){
+            WcoAddEventToScheduler(WcoGetScheduler(), WcoGetCurrentCo(), fd, EPOLLIN, socket_attr_array[fd]->read_timeout);
+            WcoYield();
+            WcoRemoveEventFromScheduler(WcoGetScheduler(), WcoGetCurrentCo(), fd, EPOLLIN);
+            // 要么因为可读而返回；要么不可读，因为超时而返回。
+            ret = g_sys_recvfrom_func(fd, buf, n, flags, addr, addr_len);
+        }
+        return ret;
+    }
+
+    return g_sys_recvfrom_func(fd, buf, n, flags, addr, addr_len);
+}
+
+
+ssize_t sendto(int fd, const void *buf, size_t n,
+               int flags, const struct sockaddr *addr,
+               socklen_t addr_len)
+{
+    HOOK_SYS_FUNC(sendto);
+
+    if(WcoHookIsEnabled() && socket_attr_array[fd] && socket_attr_array[fd]->block){
+        ssize_t ret = g_sys_sendto_func(fd, buf, n, flags, addr, addr_len);
+        if(ret < 0 && errno == EAGAIN){
+            WcoAddEventToScheduler(WcoGetScheduler(), WcoGetCurrentCo(), fd, EPOLLOUT, socket_attr_array[fd]->write_timeout);
+            WcoYield();
+            WcoRemoveEventFromScheduler(WcoGetScheduler(), WcoGetCurrentCo(), fd, EPOLLOUT);
+            // 要么因为可写而返回；要么不可写，因为超时而返回。
+            ret = g_sys_sendto_func(fd, buf, n, flags, addr, addr_len);
+        }
+        return ret;
+    }
+
+    return g_sys_sendto_func(fd, buf, n, flags, addr, addr_len);
+}
+
 
