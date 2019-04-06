@@ -46,7 +46,6 @@ struct WcoRoutine_t{
     WcoStack *stack;
     WcoFn fn;
     bool isEnd;
-
     void *saveBuffer;
     size_t saveBufferSize;
 };

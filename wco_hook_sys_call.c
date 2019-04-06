@@ -14,6 +14,7 @@
 #include <assert.h>
 #include <sys/epoll.h>
 #include <errno.h>
+#include <memory.h>
 #include "wco_hook_sys_call.h"
 #include "wco_scheduler.h"
 
@@ -56,6 +57,7 @@ struct socket_attr_t{
 };
 
 static struct socket_attr_t *socket_attr_array[102400];
+static __thread bool hook_is_enabled;
 
 typedef int (*socket_pfn_t)(int domain, int type, int protocol);
 typedef int (*connect_pfn_t)(int socket, const struct sockaddr *address, socklen_t address_len);
@@ -82,8 +84,6 @@ typedef int (*getsockopt_pfn_t)(int sockfd, int level, int optname,
 typedef int (*setsockopt_pfn_t)(int sockfd, int level, int optname,
                                 const void *optval, socklen_t optlen);
 
-typedef struct hostent* (*gethostbyname_pfn_t)(const char *name);
-
 
 static socket_pfn_t g_sys_socket_func;
 static fcntl_pfn_t g_sys_fcntl_func;
@@ -96,12 +96,15 @@ static send_pfn_t g_sys_send_func;
 static recv_pfn_t g_sys_recv_func;
 static sendto_pfn_t g_sys_sendto_func;
 static recvfrom_pfn_t g_sys_recvfrom_func;
+static getsockopt_pfn_t g_sys_getsockopt_func;
+static setsockopt_pfn_t g_sys_setsockopt_func;
 
 
 static struct socket_attr_t* AllocSocketAttr(int fd){
     struct socket_attr_t* fd_attr = calloc(1, sizeof(struct socket_attr_t));
     assert(fd_attr);
     fd_attr->block = true;
+    HOOK_SYS_FUNC(fcntl);
     int flags = g_sys_fcntl_func(fd, F_GETFL) | O_NONBLOCK;
     assert(g_sys_fcntl_func( fd, F_SETFL, flags) >= 0);
     return fd_attr;
@@ -117,7 +120,7 @@ static void FreeSocketAttr(int fd){
 int socket(int domain, int type, int protocol){
     HOOK_SYS_FUNC(socket);
 
-    if(!WcoHookIsEnabled()){
+    if(!WcoIsHookEnabled()){
         return g_sys_socket_func(domain, type, protocol);
     }
 
@@ -134,7 +137,7 @@ int socket(int domain, int type, int protocol){
 int connect(int fd, const struct sockaddr *address, socklen_t address_len){
     HOOK_SYS_FUNC(connect);
 
-    if(WcoHookIsEnabled() && socket_attr_array[fd] && socket_attr_array[fd]->block){
+    if(WcoIsHookEnabled() && socket_attr_array[fd] && socket_attr_array[fd]->block){
         int ret = g_sys_connect_func(fd, address, address_len);
         if(ret < 0 &&  errno == EAGAIN){ // 存疑
             struct timeval t = {0,0};
@@ -166,7 +169,7 @@ int connect(int fd, const struct sockaddr *address, socklen_t address_len){
 int accept(int fd, struct sockaddr * addr, socklen_t * addr_len){
     HOOK_SYS_FUNC(accept);
 
-    if(WcoHookIsEnabled() && socket_attr_array[fd] && socket_attr_array[fd]->block){
+    if(WcoIsHookEnabled() && socket_attr_array[fd] && socket_attr_array[fd]->block){
         int ret = g_sys_accept_func(fd, addr, addr_len);
         if(ret < 0 && errno == EAGAIN){
             struct timeval t = {0,0};
@@ -232,7 +235,7 @@ int fcntl(int fd, int cmd, ...){
         {
             ret = g_sys_fcntl_func( fd,cmd );
             struct socket_attr_t *fd_attr = socket_attr_array[fd];
-            if( WcoHookIsEnabled() && fd_attr){
+            if( WcoIsHookEnabled() && fd_attr){
                 ret = fd_attr->block ? (ret&~O_NONBLOCK) : (ret|O_NONBLOCK);
             }
             break;
@@ -241,7 +244,7 @@ int fcntl(int fd, int cmd, ...){
         {
             struct socket_attr_t *fd_attr = socket_attr_array[fd];
             int flag = va_arg(arg_ptr,int);
-            if( WcoHookIsEnabled() && fd_attr) { // 如果开启了hook，并且fd是socket fd
+            if( WcoIsHookEnabled() && fd_attr) { // 如果开启了hook，并且fd是socket fd
                 fd_attr->block = flag & O_NONBLOCK ? false : true;
                 flag |= O_NONBLOCK;
             }
@@ -260,7 +263,7 @@ int fcntl(int fd, int cmd, ...){
 ssize_t read(int fd, void *buf, size_t nbyte ){
     HOOK_SYS_FUNC(read);
 
-    if(WcoHookIsEnabled() && socket_attr_array[fd] && socket_attr_array[fd]->block){
+    if(WcoIsHookEnabled() && socket_attr_array[fd] && socket_attr_array[fd]->block){
         ssize_t ret = g_sys_read_func(fd, buf, nbyte);
         if(ret < 0 && errno == EAGAIN){
             WcoAddEventToScheduler(WcoGetScheduler(), WcoGetCurrentCo(), fd, EPOLLIN, socket_attr_array[fd]->read_timeout);
@@ -279,7 +282,7 @@ ssize_t read(int fd, void *buf, size_t nbyte ){
 ssize_t write(int fd, const void *buf, size_t nbyte ){
     HOOK_SYS_FUNC(write);
 
-    if(WcoHookIsEnabled() && socket_attr_array[fd] && socket_attr_array[fd]->block){
+    if(WcoIsHookEnabled() && socket_attr_array[fd] && socket_attr_array[fd]->block){
         ssize_t ret = g_sys_write_func(fd, buf, nbyte);
         if(ret < 0 && errno == EAGAIN){
             WcoAddEventToScheduler(WcoGetScheduler(), WcoGetCurrentCo(), fd, EPOLLOUT, socket_attr_array[fd]->write_timeout);
@@ -298,7 +301,7 @@ ssize_t write(int fd, const void *buf, size_t nbyte ){
 ssize_t recv( int fd, void *buf, size_t n, int flags ){
     HOOK_SYS_FUNC(recv);
 
-    if(WcoHookIsEnabled() && socket_attr_array[fd] && socket_attr_array[fd]->block){
+    if(WcoIsHookEnabled() && socket_attr_array[fd] && socket_attr_array[fd]->block){
         ssize_t ret = g_sys_recv_func(fd, buf, n, flags);
         if(ret < 0 && errno == EAGAIN){
             WcoAddEventToScheduler(WcoGetScheduler(), WcoGetCurrentCo(), fd, EPOLLIN, socket_attr_array[fd]->read_timeout);
@@ -317,7 +320,7 @@ ssize_t recv( int fd, void *buf, size_t n, int flags ){
 ssize_t send(int fd, const void *buf, size_t n, int flags){
     HOOK_SYS_FUNC(send);
 
-    if(WcoHookIsEnabled() && socket_attr_array[fd] && socket_attr_array[fd]->block){
+    if(WcoIsHookEnabled() && socket_attr_array[fd] && socket_attr_array[fd]->block){
         ssize_t ret = g_sys_send_func(fd, buf, n, flags);
         if(ret < 0 && errno == EAGAIN){
             WcoAddEventToScheduler(WcoGetScheduler(), WcoGetCurrentCo(), fd, EPOLLOUT, socket_attr_array[fd]->write_timeout);
@@ -339,7 +342,7 @@ ssize_t recvfrom(int fd, void *buf, size_t n,
 {
     HOOK_SYS_FUNC(recvfrom);
 
-    if(WcoHookIsEnabled() && socket_attr_array[fd] && socket_attr_array[fd]->block){
+    if(WcoIsHookEnabled() && socket_attr_array[fd] && socket_attr_array[fd]->block){
         ssize_t ret = g_sys_recvfrom_func(fd, buf, n, flags, addr, addr_len);
         if(ret < 0 && errno == EAGAIN){
             WcoAddEventToScheduler(WcoGetScheduler(), WcoGetCurrentCo(), fd, EPOLLIN, socket_attr_array[fd]->read_timeout);
@@ -361,7 +364,7 @@ ssize_t sendto(int fd, const void *buf, size_t n,
 {
     HOOK_SYS_FUNC(sendto);
 
-    if(WcoHookIsEnabled() && socket_attr_array[fd] && socket_attr_array[fd]->block){
+    if(WcoIsHookEnabled() && socket_attr_array[fd] && socket_attr_array[fd]->block){
         ssize_t ret = g_sys_sendto_func(fd, buf, n, flags, addr, addr_len);
         if(ret < 0 && errno == EAGAIN){
             WcoAddEventToScheduler(WcoGetScheduler(), WcoGetCurrentCo(), fd, EPOLLOUT, socket_attr_array[fd]->write_timeout);
@@ -377,3 +380,54 @@ ssize_t sendto(int fd, const void *buf, size_t n,
 }
 
 
+extern int getsockopt (int fd, int level, int optname,
+                       void *optval, socklen_t *optlen)
+{
+    HOOK_SYS_FUNC(getsockopt);
+
+    if(WcoIsHookEnabled() && socket_attr_array[fd] && level == SOL_SOCKET){
+        if(optname == SO_RCVTIMEO)
+        {
+            *(struct timeval*)optval = socket_attr_array[fd]->read_timeout;
+            return 0;
+        }
+        else if(optname == SO_SNDTIMEO)
+        {
+            *(struct timeval*)optval = socket_attr_array[fd]->write_timeout;
+            return 0;
+        }
+    }
+    return g_sys_getsockopt_func(fd, level, optname, optval, optlen);
+}
+
+
+int setsockopt(int fd, int level, int optname,
+               const void *optval, socklen_t optlen)
+{
+    HOOK_SYS_FUNC(setsockopt);
+
+    if(WcoIsHookEnabled() && socket_attr_array[fd] && level == SOL_SOCKET){
+        if(optname == SO_RCVTIMEO)
+        {
+            socket_attr_array[fd]->read_timeout = *(struct timeval *) optval;
+            return 0;
+        }
+        else if(optname == SO_SNDTIMEO)
+        {
+            socket_attr_array[fd]->write_timeout = *(struct timeval*)optval;
+            return 0;
+        }
+    }
+
+    return g_sys_setsockopt_func(fd, level, optname, optval, optlen);
+}
+
+
+bool WcoIsHookEnabled(){
+    return hook_is_enabled;
+}
+
+
+void WcoSetHookEnabled(bool b){
+    hook_is_enabled = b;
+}

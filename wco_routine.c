@@ -220,3 +220,6 @@ void PrepareSharedStack(WcoRoutine* co){
 }
 
 
+WcoRoutine *WcoGetCurrentCo(){
+    return wcoEnv->curCo;
+}

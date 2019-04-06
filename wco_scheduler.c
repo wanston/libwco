@@ -1,6 +1,7 @@
 //
 // Created by tong on 19-4-2.
 //
+#include <stdio.h>
 #include <sys/epoll.h>
 #include <assert.h>
 #include <memory.h>
@@ -14,8 +15,8 @@
 
 static __thread WcoScheduler *wcoScheduler;
 
-static int WcoAddEventToScheduler(WcoScheduler* , WcoRoutine*co, int fd, uint32_t events, struct timeval time_out);
-static void WcoRemoveEventFromScheduler(WcoScheduler* , WcoRoutine*co, int fd, uint32_t events);
+int WcoAddEventToScheduler(WcoScheduler* , WcoRoutine*co, int fd, uint32_t events, struct timeval time_out);
+void WcoRemoveEventFromScheduler(WcoScheduler* , WcoRoutine*co, int fd, uint32_t events);
 
 
 WcoScheduler *WcoGetScheduler(){
@@ -76,6 +77,7 @@ void WcoRunScheduler(WcoScheduler *scheduler) {
         }
         // 2.4 运行active的协程
         for(int i=0; i<scheduler->activeSize; i++){
+            printf("resume co %x\n", scheduler->activeCos[i]);
             WcoResume(scheduler->activeCos[i]);
             // 到这，肯定是yield回来的
             // 1. 要么是执行完co yield回来的；
@@ -83,11 +85,13 @@ void WcoRunScheduler(WcoScheduler *scheduler) {
             if(scheduler->activeCos[i]->isEnd){ // 如果是第一种情况
                 WcoDestroy(scheduler->activeCos[i]);
             }
-
         }
         scheduler->activeSize = 0;
         // 2.5 判断结束条件
-         if(scheduler->epollElemsSize == 0){
+         if(scheduler->epollElemsSize == 0 && WcoQueueEmpty(scheduler->pendingCoQueue)){ // epollElemsSize表示epoll监控的描述符数目
+             // TODO: 还需要确保所有的协程都isEnd
+#error
+             printf("normal exit.\n");
              break;
          }
     }
@@ -129,7 +133,7 @@ int WcoAddEventToScheduler(WcoScheduler* scheduler, WcoRoutine* co, int fd, uint
 }
 
 
-static void WcoRemoveEventFromScheduler(WcoScheduler* scheduler, WcoRoutine*co, int fd, uint32_t events){
+void WcoRemoveEventFromScheduler(WcoScheduler* scheduler, WcoRoutine*co, int fd, uint32_t events){
     scheduler->epollElems[fd].co = NULL;
     scheduler->epollElemsSize--;
 }
