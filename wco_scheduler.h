@@ -7,6 +7,7 @@
 
 #include "wco_tools.h"
 #include "wco_routine.h"
+#include "wco_tools.h"
 
 #define MAX_SIZE 1024*10
 
@@ -15,6 +16,7 @@ struct WcoEpollElem_t {
     WcoRoutine* co;
     int events;
     long timeout;
+    WcoHeapNode *timer;
 };
 
 typedef struct WcoEpollElem_t WcoEpollElem;
@@ -28,9 +30,11 @@ struct WcoScheduler_t{
     WcoEpollElem epollElems[MAX_SIZE];
     size_t epollElemsSize; // 在系统调用中，把元素降低
 
-    WcoRoutine *activeCos[MAX_SIZE];
+
+    WcoRoutine *activeCos[MAX_SIZE]; // 待reusme的协程
     size_t activeSize;
 
+    size_t runningSize; // 调度器中的协程数目
     WcoBigRootHeap *heap;
 };
 

@@ -19,14 +19,15 @@ void WcoQueueDestroy(WcoQueue* q);
 typedef struct {
     long time;
     int fd;
+    bool valid;
 } WcoHeapNode;
 
 struct WcoBigRootHeap_t;
 typedef struct WcoBigRootHeap_t WcoBigRootHeap;
 
 WcoBigRootHeap* WcoHeapCreate();
-void WcoHeapPush(WcoBigRootHeap* heap, WcoHeapNode node);
-WcoHeapNode WcoHeapTop(WcoBigRootHeap* heap);
+void WcoHeapPush(WcoBigRootHeap* heap, WcoHeapNode *node);
+WcoHeapNode* WcoHeapTop(WcoBigRootHeap* heap);
 void WcoHeapPop(WcoBigRootHeap* heap);
 bool WcoHeapEmpty(WcoBigRootHeap* heap);
 void WcoHeapDestroy(WcoBigRootHeap* heap);

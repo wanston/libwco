@@ -12,11 +12,21 @@ set(SOURCE_ASM_FILES ./wco_swap.S)
 
 set(SOURCE_FILES "${SOURCE_C_FILES};${SOURCE_ASM_FILES}")
 
-set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -D_GNU_SOURCE")
+set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -D_GNU_SOURCE ") # -DDEBUG
 
-add_executable(example example.c ${SOURCE_FILES})
-add_executable(example_server example_server.c ${SOURCE_FILES})
-target_link_libraries(example_server pthread dl)
-add_executable(tools_test tools_test.c ${SOURCE_FILES})
-add_executable(scheduler_test scheduler_test.c ${SOURCE_FILES})
-target_link_libraries(scheduler_test pthread dl)
+macro(add_example_target EXAMPLE_TARGET)
+    add_executable("example_${EXAMPLE_TARGET}" "example_${EXAMPLE_TARGET}.c" ${SOURCE_FILES})
+    target_link_libraries("example_${EXAMPLE_TARGET}" pthread dl)
+endmacro(add_example_target)
+
+macro(add_test_target TEST_TARGET)
+    add_executable("test_${TEST_TARGET}" "test_${TEST_TARGET}.c" ${SOURCE_FILES})
+    target_link_libraries("test_${TEST_TARGET}" pthread dl)
+endmacro(add_test_target)
+
+add_example_target(routine)
+add_example_target(scheduler)
+add_example_target(server)
+
+add_test_target(tools)
+

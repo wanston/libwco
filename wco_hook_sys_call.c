@@ -15,6 +15,9 @@
 #include <sys/epoll.h>
 #include <errno.h>
 #include <memory.h>
+#ifdef DEBUG
+#include <stdio.h>
+#endif
 #include "wco_hook_sys_call.h"
 #include "wco_scheduler.h"
 
@@ -174,11 +177,14 @@ int accept(int fd, struct sockaddr * addr, socklen_t * addr_len){
         if(ret < 0 && errno == EAGAIN){
             struct timeval t = {0,0};
             WcoAddEventToScheduler(WcoGetScheduler(), WcoGetCurrentCo(), fd, EPOLLIN, t);
+#ifdef DEBUG
+            printf("accept ");
+#endif
             WcoYield();
             WcoRemoveEventFromScheduler(WcoGetScheduler(), WcoGetCurrentCo(), fd, EPOLLIN);
             ret = g_sys_accept_func(fd, addr, addr_len);
             if(ret >= 0){
-                socket_attr_array[fd] = AllocSocketAttr(fd); // Linux下，accept不会继承listen_fd的flags。
+                socket_attr_array[ret] = AllocSocketAttr(ret); // Linux下，accept不会继承listen_fd的flags。
             }
         }
         return ret;
@@ -267,6 +273,9 @@ ssize_t read(int fd, void *buf, size_t nbyte ){
         ssize_t ret = g_sys_read_func(fd, buf, nbyte);
         if(ret < 0 && errno == EAGAIN){
             WcoAddEventToScheduler(WcoGetScheduler(), WcoGetCurrentCo(), fd, EPOLLIN, socket_attr_array[fd]->read_timeout);
+#ifdef DEBUG
+            printf("read ");
+#endif
             WcoYield();
             WcoRemoveEventFromScheduler(WcoGetScheduler(), WcoGetCurrentCo(), fd, EPOLLIN);
             // 要么因为可读而返回；要么不可读，因为超时而返回。

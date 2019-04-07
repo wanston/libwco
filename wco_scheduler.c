@@ -1,7 +1,9 @@
 //
 // Created by tong on 19-4-2.
 //
+#ifdef DEBUG
 #include <stdio.h>
+#endif
 #include <sys/epoll.h>
 #include <assert.h>
 #include <memory.h>
@@ -34,7 +36,6 @@ WcoScheduler *WcoGetScheduler(){
 };
 
 
-
 void WcoAddCoToScheduler(WcoScheduler* scheduler, WcoRoutine* co){
     WcoQueuePush(scheduler->pendingCoQueue, co);
 }
@@ -59,39 +60,62 @@ void WcoRunScheduler(WcoScheduler *scheduler) {
         for (int i = 0; i < res; i++) {
             int fd = result[i].data.fd;
             assert(scheduler->activeSize < MAX_SIZE);
+            if(scheduler->epollElems[fd].timer){
+                scheduler->epollElems[fd].timer->valid = false;
+#ifdef DEBUG
+                printf("valid false co %x timer %x\n", scheduler->epollElems[fd].co, scheduler->epollElems[fd].timer);
+#endif
+            }
             scheduler->activeCos[scheduler->activeSize++] = scheduler->epollElems[fd].co;
+#ifdef DEBUG
+            printf("active epoll co %x\n", scheduler->epollElems[fd].co);
+#endif
+            // TODO: 把对应的timer标记为失效
 
-            // 把对应的timer标记为失效
         }
         // 2.2 处理pending的协程
         while (!WcoQueueEmpty(q)) {
             scheduler->activeCos[scheduler->activeSize++] = (WcoRoutine *) WcoQueuePop(q);
+#ifdef DEBUG
+            printf("active queue co %x\n", scheduler->activeCos[scheduler->activeSize-1]);
+#endif
         }
         // 2.3 处理超时的fd
         long now = WcoGetCurrentMsTime();
-        WcoHeapNode node;
-        while(!WcoHeapEmpty(scheduler->heap) && (node = WcoHeapTop(scheduler->heap)).time < now){ // 现在时间已经超过了预定时间
-            assert(scheduler->activeSize < MAX_SIZE);
-            scheduler->activeCos[scheduler->activeSize++] = scheduler->epollElems[node.fd].co;
+        WcoHeapNode *node;
+        while(!WcoHeapEmpty(scheduler->heap) && (node = WcoHeapTop(scheduler->heap))->time < now){ // 现在时间已经超过了预定时间
+            if(node->valid){
+#ifdef DEBUG
+                printf("valid true co %x timer %x\n", scheduler->epollElems[node->fd].co, scheduler->epollElems[node->fd].timer);
+#endif
+                assert(scheduler->activeSize < MAX_SIZE);
+                scheduler->activeCos[scheduler->activeSize++] = scheduler->epollElems[node->fd].co;
+//#ifdef DEBUG
+//                printf("active timeout co %x\n", scheduler->activeCos[scheduler->activeSize-1]);
+//#endif
+            }
             WcoHeapPop(scheduler->heap);
+            free(node);
         }
         // 2.4 运行active的协程
         for(int i=0; i<scheduler->activeSize; i++){
-            printf("resume co %x\n", scheduler->activeCos[i]);
             WcoResume(scheduler->activeCos[i]);
             // 到这，肯定是yield回来的
             // 1. 要么是执行完co yield回来的；
             // 2. 要么是co执行中，注册了co，yield回来的；
             if(scheduler->activeCos[i]->isEnd){ // 如果是第一种情况
+#ifdef DEBUG
+                printf("destroy co %x\n", scheduler->activeCos[i]);
+#endif
                 WcoDestroy(scheduler->activeCos[i]);
             }
         }
         scheduler->activeSize = 0;
         // 2.5 判断结束条件
-         if(scheduler->epollElemsSize == 0 && WcoQueueEmpty(scheduler->pendingCoQueue)){ // epollElemsSize表示epoll监控的描述符数目
-             // TODO: 还需要确保所有的协程都isEnd
-#error
+         if(scheduler->epollElemsSize == 0 && WcoQueueEmpty(scheduler->pendingCoQueue)){ // 因为2.4中可能又新加了协程进来
+#ifdef DEBUG
              printf("normal exit.\n");
+#endif
              break;
          }
     }
@@ -115,18 +139,16 @@ int WcoAddEventToScheduler(WcoScheduler* scheduler, WcoRoutine* co, int fd, uint
     struct epoll_event e = {0};
     e.events = events;
     e.data.fd = fd;
-    int res = epoll_ctl(scheduler->epollFd, EPOLL_CTL_ADD, fd, &e);
-    if(res < 0){
-        --scheduler->epollElemsSize;
-        return -1;
-    }
-
+    assert(epoll_ctl(scheduler->epollFd, EPOLL_CTL_ADD, fd, &e) == 0);
 
     if(timeout > 0){ // timeout为0表示不设置超时
-        WcoHeapNode node;
-        node.time = WcoGetCurrentMsTime() + timeout;
-        node.fd = fd;
+        WcoHeapNode *node = (WcoHeapNode*)malloc(sizeof(WcoHeapNode));
+        node->time = WcoGetCurrentMsTime() + timeout;
+        node->fd = fd;
+        node->valid = true;
+        scheduler->epollElems[fd].timer = node;
         WcoHeapPush(scheduler->heap, node);
+        printf("push timer %x\n", node);
     }
 
     return 0;
@@ -134,7 +156,15 @@ int WcoAddEventToScheduler(WcoScheduler* scheduler, WcoRoutine* co, int fd, uint
 
 
 void WcoRemoveEventFromScheduler(WcoScheduler* scheduler, WcoRoutine*co, int fd, uint32_t events){
+    struct epoll_event e = {0};
+    e.events = events;
+    assert(epoll_ctl(scheduler->epollFd, EPOLL_CTL_DEL, fd, &e) == 0);
     scheduler->epollElems[fd].co = NULL;
+    if(scheduler->epollElems[fd].timer) { // timer可能为NULL。如果当时设置的timeout是0的话，永久等待，timer就是NULL。
+        // 万万不可在此free timer，因为大根堆中还持有timer，还需要timer判断是否失效
+        scheduler->epollElems[fd].timer = NULL;
+    }
+
     scheduler->epollElemsSize--;
 }
 

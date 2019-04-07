@@ -22,7 +22,7 @@ void worker_routine(void *arg){
         int ret = write(fd, r, strlen(r));
         printf("read fd %d\n", fd);
         buf[14] = '\0';
-        printf("request %s", buf);
+        printf("request %s\n", buf);
     }
     printf("close %d\n", fd);
     close(fd);
@@ -52,6 +52,7 @@ void accept_routine(void *arg){
         if((fd = accept(listen_fd, (struct sockaddr *) &clientAddr, &clientSize)) >= 0) {
             printf("accept success.\n");
             WcoRoutine *co = WcoCreate(NULL, worker_routine, fd);
+            printf("create co %x fd %d\n", co, fd);
             WcoAddCoToScheduler(WcoGetScheduler(), co);
         }else{
             printf("accept fail.\n");
@@ -60,8 +61,8 @@ void accept_routine(void *arg){
 }
 
 int main(){
-
     WcoRoutine *acceptCo = WcoCreate(NULL, accept_routine, NULL);
+    printf("acceptCo %x\n", acceptCo);
 
     WcoSetHookEnabled(true);
 

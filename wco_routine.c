@@ -8,7 +8,9 @@
 #include <sys/mman.h>
 #include <assert.h>
 #include <stdbool.h>
+#ifdef DEBUG
 #include <stdio.h>
+#endif
 #include "wco_routine.h"
 #include "wco_assert.h"
 
@@ -32,6 +34,9 @@ void WcoInitRoutineEnv(){
     WcoRoutine *mainCo = (WcoRoutine*)calloc(sizeof(WcoRoutine), 1);
     wcoEnv->curCo = mainCo;
     wcoEnv->mainCo = mainCo;
+#ifdef DEBUG
+    printf("main co %x\n", mainCo);
+#endif
 }
 
 
@@ -145,7 +150,11 @@ WcoStack *WcoCreateStack(size_t size, bool guardPageEnabled){
 
 
 void WcoResume(WcoRoutine* to_co){
+#ifdef DEBUG
+    printf("resume co %x\n", to_co);
+#endif
     assert(to_co != wcoEnv->mainCo);
+    assert(!to_co->isEnd);
     assert(wcoEnv->curCo == wcoEnv->mainCo);
 
     if(to_co->isEnd){
@@ -164,6 +173,9 @@ void WcoResume(WcoRoutine* to_co){
 
 
 void WcoYield(){
+#ifdef DEBUG
+    printf("yield to main co\n");
+#endif
     assert(wcoEnv->curCo != wcoEnv->mainCo);
     WcoSwapContext(wcoEnv->curCo, wcoEnv->mainCo);
 }

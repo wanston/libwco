@@ -66,7 +66,7 @@ void WcoQueueDestroy(WcoQueue* q){
 
 
 struct WcoBigRootHeap_t{
-    WcoHeapNode *content;
+    WcoHeapNode **content;
     size_t capacity; // 元素的容量，content的空间是capacity+1
     size_t size; // 元素的数目
 };
@@ -75,16 +75,16 @@ struct WcoBigRootHeap_t{
 WcoBigRootHeap* WcoHeapCreate(){
     WcoBigRootHeap *heap = (WcoBigRootHeap*)calloc(1, sizeof(WcoBigRootHeap));
     heap->capacity = 32;
-    heap->content = (WcoHeapNode*)malloc(sizeof(WcoHeapNode)*(heap->capacity+1));
+    heap->content = (WcoHeapNode**)malloc(sizeof(void*)*(heap->capacity+1));
     return heap;
 }
 
 
-void WcoHeapPush(WcoBigRootHeap* heap, WcoHeapNode node){
+void WcoHeapPush(WcoBigRootHeap* heap, WcoHeapNode *node){
     if(heap->size == heap->capacity){
         size_t newCap = heap->capacity*2;
-        WcoHeapNode *l = (WcoHeapNode*)malloc(sizeof(WcoHeapNode)*(newCap+1));
-        memcpy(l, heap->content, sizeof(WcoHeapNode)*(heap->capacity+1));
+        WcoHeapNode **l = (WcoHeapNode**)malloc(sizeof(void*)*(newCap+1));
+        memcpy(l, heap->content, sizeof(void*)*(heap->capacity+1));
         free(heap->content);
         heap->content = l;
         heap->capacity = newCap;
@@ -92,13 +92,13 @@ void WcoHeapPush(WcoBigRootHeap* heap, WcoHeapNode node){
 
     heap->size++;
     size_t hole = heap->size;
-    for(; hole > 1 && node.time > heap->content[hole/2].time; hole /= 2){
+    for(; hole > 1 && node->time > heap->content[hole/2]->time; hole /= 2){
         heap->content[hole] = heap->content[hole/2];
     }
     heap->content[hole] = node;
 }
 
-WcoHeapNode WcoHeapTop(WcoBigRootHeap* heap){
+WcoHeapNode *WcoHeapTop(WcoBigRootHeap* heap){
     assert(!WcoHeapEmpty(heap));
     return heap->content[1];
 }
@@ -106,14 +106,14 @@ WcoHeapNode WcoHeapTop(WcoBigRootHeap* heap){
 void WcoHeapPop(WcoBigRootHeap* heap){
     assert(!WcoHeapEmpty(heap));
     size_t hole = 1;
-    WcoHeapNode node = heap->content[heap->size];
+    WcoHeapNode *node = heap->content[heap->size];
     heap->size--;
     while(hole*2 <= heap->size){
         size_t max=hole*2;
-        if(hole*2+1 <= heap->size && heap->content[hole*2+1].time > heap->content[hole*2].time){
+        if(hole*2+1 <= heap->size && heap->content[hole*2+1]->time > heap->content[hole*2]->time){
             max = hole*2+1;
         }
-        if(node.time < heap->content[max].time){
+        if(node->time < heap->content[max]->time){
             heap->content[hole] = heap->content[max];
         }else{
             break;

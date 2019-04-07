@@ -2,6 +2,7 @@
 // Created by tong on 19-4-4.
 //
 #include <stdio.h>
+#include <malloc.h>
 #include "wco_tools.h"
 
 int main(){
@@ -21,46 +22,56 @@ int main(){
     printf("\n");
 
     // 测试
-    WcoHeapNode n = {0, 0};
+    WcoHeapNode *n;
+    n = malloc(sizeof(WcoHeapNode));
+
     WcoBigRootHeap *h = WcoHeapCreate();
 
-    n.time = 4;
+    n = malloc(sizeof(WcoHeapNode));
+    n->time = 4;
     WcoHeapPush(h, n);
-    n.time = 3;
+    n = malloc(sizeof(WcoHeapNode));
+    n->time = 3;
     WcoHeapPush(h, n);
-    n.time = 9;
+    n = malloc(sizeof(WcoHeapNode));
+    n->time = 9;
     WcoHeapPush(h, n);
-    n.time = 6;
+    n = malloc(sizeof(WcoHeapNode));
+    n->time = 6;
     WcoHeapPush(h, n);
 
-    printf("%ld\n", WcoHeapTop(h).time);
+    printf("%ld\n", WcoHeapTop(h)->time);
     WcoHeapPop(h);
-    printf("%ld\n", WcoHeapTop(h).time);
+    printf("%ld\n", WcoHeapTop(h)->time);
     WcoHeapPop(h);
-    printf("%ld\n", WcoHeapTop(h).time);
+    printf("%ld\n", WcoHeapTop(h)->time);
     WcoHeapPop(h);
 
-    printf("%ld\n", WcoHeapTop(h).time);
+    printf("%ld\n", WcoHeapTop(h)->time);
 
-    n.time = 3;
+    n = malloc(sizeof(WcoHeapNode));
+    n->time = 3;
     WcoHeapPush(h, n);
-    n.time = 8;
+    n = malloc(sizeof(WcoHeapNode));
+    n->time = 8;
     WcoHeapPush(h, n);
-    n.time = 7;
+    n = malloc(sizeof(WcoHeapNode));
+    n->time = 7;
     WcoHeapPush(h, n);
 
     while(!WcoHeapEmpty(h)){
-        printf("%ld\n", WcoHeapTop(h).time);
+        printf("%ld\n", WcoHeapTop(h)->time);
         WcoHeapPop(h);
     }
 
     for(int i=0; i<100; i++){
-        n.time = i;
+        n = malloc(sizeof(WcoHeapNode));
+        n->time = i;
         WcoHeapPush(h, n);
     }
 
     while(!WcoHeapEmpty(h)){
-        printf("%ld\n", WcoHeapTop(h).time);
+        printf("%ld\n", WcoHeapTop(h)->time);
         WcoHeapPop(h);
     }
 
