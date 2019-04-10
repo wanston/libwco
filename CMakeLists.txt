@@ -31,3 +31,8 @@ add_example_target(scheduler)
 add_example_target(server)
 add_test_target(tools)
 
+
+add_library(wco STATIC ${SOURCE_FILES})
+target_link_libraries(wco dl)
+install(TARGETS wco ARCHIVE DESTINATION /home/tong/Project/开发/WebServerBasedLibwo/lib)
+install(DIRECTORY include/ DESTINATION /home/tong/Project/开发/WebServerBasedLibwo/include/libwco)
