@@ -148,7 +148,6 @@ int WcoAddEventToScheduler(WcoScheduler* scheduler, WcoRoutine* co, int fd, uint
         node->valid = true;
         scheduler->epollElems[fd].timer = node;
         WcoHeapPush(scheduler->heap, node);
-        printf("push timer %x\n", node);
     }
 
     return 0;

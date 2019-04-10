@@ -60,7 +60,7 @@ struct socket_attr_t{
 };
 
 static struct socket_attr_t *socket_attr_array[102400];
-static __thread bool hook_is_enabled;
+static bool hook_is_enabled;
 
 typedef int (*socket_pfn_t)(int domain, int type, int protocol);
 typedef int (*connect_pfn_t)(int socket, const struct sockaddr *address, socklen_t address_len);
@@ -183,9 +183,9 @@ int accept(int fd, struct sockaddr * addr, socklen_t * addr_len){
             WcoYield();
             WcoRemoveEventFromScheduler(WcoGetScheduler(), WcoGetCurrentCo(), fd, EPOLLIN);
             ret = g_sys_accept_func(fd, addr, addr_len);
-            if(ret >= 0){
-                socket_attr_array[ret] = AllocSocketAttr(ret); // Linux下，accept不会继承listen_fd的flags。
-            }
+        }
+        if(ret >= 0){
+            socket_attr_array[ret] = AllocSocketAttr(ret); // Linux下，accept不会继承listen_fd的flags。
         }
         return ret;
     }
